@@ -29,5 +29,8 @@ debug/
 vendor/
 go.work
 
+# Generated HTML
+htmlfile/
+
 # Internal Planning / AI Context
 .internal/
