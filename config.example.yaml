@@ -1,0 +1,102 @@
+# =============================================================================
+# RootWit Example Configuration
+# =============================================================================
+#
+# Copy this file and customize for your environment.
+# All credentials MUST use ${ENV_VAR} syntax — never hardcode secrets.
+#
+# Usage:
+#   ./rootwit --config config.yaml          # run with scheduler
+#   ./rootwit --config config.yaml --once   # run once, exit
+#   ./rootwit --config config.yaml --dry-run # detect schema changes, don't sync
+#   ./rootwit --config config.yaml --validate # test connections only
+# =============================================================================
+
+version: "1"
+
+# Connection name — used as the key in state.json
+name: "prod-pipeline"
+
+# =============================================================================
+# Source Configuration
+# =============================================================================
+source:
+  type: postgres                    # Currently supported: postgres
+  host: ${POSTGRES_HOST}            # e.g., localhost, db.example.com
+  port: 5432                        # Default: 5432
+  database: ${POSTGRES_DB}          # Database name
+  username: ${POSTGRES_USER}        # Database user
+  password: ${POSTGRES_PASS}        # Database password (MUST be env var)
+  ssl_mode: require                 # disable | require | verify-full
+  # max_connections: 5              # Max concurrent connections (default: 5)
+  # connection_timeout_seconds: 30  # Connection timeout (default: 30)
+
+# =============================================================================
+# Destination Configuration
+# =============================================================================
+destination:
+  type: bigquery                    # Currently supported: bigquery
+  project_id: ${GCP_PROJECT_ID}    # GCP project ID
+  dataset_id: rootwit_sync          # BigQuery dataset name
+  credentials_file: ${GOOGLE_CREDENTIALS_FILE}  # Path to service account JSON key
+  auto_create_dataset: true         # Create dataset if it doesn't exist
+  location: US                      # BigQuery dataset location
+
+# =============================================================================
+# Sync Configuration
+# =============================================================================
+sync:
+  # Cron schedule (robfig/cron syntax):
+  #   "*/15 * * * *"  → every 15 minutes
+  #   "0 * * * *"     → every hour
+  #   "0 6 * * *"     → daily at 6am
+  schedule: "*/30 * * * *"
+
+  # Rows read from source per batch (default: 10000)
+  batch_size: 10000
+
+  # State file location (default: ./rootwit-state.json)
+  state_file: ./rootwit-state.json
+
+  # Tables to sync
+  tables:
+    - name: users
+      sync_mode: incremental        # Sync only new/updated rows
+      cursor_field: updated_at      # Required for incremental mode
+      # destination_table: dim_users # Optional: override destination table name
+
+    - name: orders
+      sync_mode: incremental
+      cursor_field: updated_at
+
+    - name: events
+      sync_mode: append_only        # Events only grow, never update
+      cursor_field: created_at
+
+    - name: product_catalog
+      sync_mode: full_refresh       # Small table — truncate + reload each run
+
+# =============================================================================
+# Alert Configuration
+# =============================================================================
+alerts:
+  on_failure:
+    # Slack webhook (optional)
+    slack_webhook: ${SLACK_WEBHOOK_URL}
+
+    # Email alerts (optional)
+    email:
+      smtp_host: ${SMTP_HOST}
+      smtp_port: 587
+      username: ${SMTP_USER}
+      password: ${SMTP_PASS}
+      from: rootwit@company.com
+      to:
+        - data-team@company.com
+
+  # Alert on any schema change, even non-breaking (default: false).
+  # Set to true once you've stabilised your schema — noisy channels get muted.
+  on_schema_change: false
+
+  # Alert if last successful sync > 2× the schedule interval (default: true)
+  on_sync_gap: true

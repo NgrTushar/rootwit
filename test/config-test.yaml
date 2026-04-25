@@ -1,0 +1,115 @@
+# =============================================================================
+# RootWit Integration Test Config
+# =============================================================================
+# Mimics a real Indian SaaS startup syncing their production Postgres to
+# BigQuery for analytics. Tests all 3 sync modes and all Postgres types.
+#
+# Run with:
+#   export POSTGRES_HOST=localhost
+#   export POSTGRES_PORT=5433
+#   export POSTGRES_DB=saas_prod
+#   export POSTGRES_USER=rootwit_reader
+#   export POSTGRES_PASS=r00tw1t_test_pass
+#   export GCP_PROJECT_ID=test-project  (won't actually connect — BQ will fail)
+#
+#   ./rootwit --config test/config-test.yaml --validate   # test Postgres
+#   ./rootwit --config test/config-test.yaml --dry-run    # see schemas
+#   ./rootwit --config test/config-test.yaml --once       # attempt full sync
+# =============================================================================
+
+version: "1"
+name: "saas-prod-sync"
+
+source:
+  type: postgres
+  host: ${POSTGRES_HOST}
+  port: 5433
+  database: ${POSTGRES_DB}
+  username: ${POSTGRES_USER}
+  password: ${POSTGRES_PASS}
+  ssl_mode: disable            # local Docker test — no SSL
+  max_connections: 3
+  connection_timeout_seconds: 10
+
+destination:
+  type: bigquery
+  project_id: ${GCP_PROJECT_ID}
+  dataset_id: saas_analytics
+  credentials_file: ${GOOGLE_CREDENTIALS_FILE}
+  auto_create_dataset: true
+  location: asia-south1        # Mumbai region for Indian startup
+
+sync:
+  schedule: "*/15 * * * *"     # every 15 minutes
+  batch_size: 100              # small batch to test batching with 1000 events
+  state_file: ./test/rootwit-state.json
+
+  tables:
+    # -----------------------------------------------------------------
+    # INCREMENTAL: users table
+    # Updated rows have newer updated_at. This exercises:
+    #   - All Postgres types (BOOL, INT2/4/8, FLOAT4/8, NUMERIC, TEXT,
+    #     VARCHAR, UUID, TIMESTAMP, TIMESTAMPTZ, DATE, JSON, JSONB,
+    #     BYTEA, ARRAY)
+    #   - Cursor-based incremental reads
+    #   - 50 rows (single batch)
+    # -----------------------------------------------------------------
+    - name: users
+      sync_mode: incremental
+      cursor_field: updated_at
+
+    # -----------------------------------------------------------------
+    # INCREMENTAL: orders table
+    # Standard transactional table. Exercises:
+    #   - BIGINT for money in paise
+    #   - NUMERIC for money in INR
+    #   - REAL and DOUBLE PRECISION
+    #   - Nullable fields (notes, paid_at)
+    #   - JSONB array of items
+    #   - 200 rows (2 batches at batch_size=100)
+    # -----------------------------------------------------------------
+    - name: orders
+      sync_mode: incremental
+      cursor_field: updated_at
+
+    # -----------------------------------------------------------------
+    # APPEND_ONLY: events table
+    # Event/clickstream table — rows never update, only grow.
+    # Exercises:
+    #   - 1000 rows (10 batches at batch_size=100)
+    #   - NULL user_id (anonymous events)
+    #   - UUID session_id
+    #   - JSONB payload
+    # -----------------------------------------------------------------
+    - name: events
+      sync_mode: append_only
+      cursor_field: created_at
+
+    # -----------------------------------------------------------------
+    # FULL_REFRESH: plans table
+    # Small lookup table — truncate + reload every run.
+    # Exercises:
+    #   - TEXT[] array type
+    #   - NULL max_users (unlimited plan)
+    #   - Only 5 rows (tests small-table efficiency)
+    # -----------------------------------------------------------------
+    - name: plans
+      sync_mode: full_refresh
+
+    # -----------------------------------------------------------------
+    # APPEND_ONLY: audit_log table
+    # Compliance/audit trail. Exercises:
+    #   - Nullable JSONB (old_value, new_value)
+    #   - VARCHAR fields
+    #   - 500 rows (5 batches at batch_size=100)
+    # -----------------------------------------------------------------
+    - name: audit_log
+      sync_mode: append_only
+      cursor_field: created_at
+      destination_table: dim_audit_log  # custom destination table name
+
+alerts:
+  on_failure:
+    slack_webhook: ${SLACK_WEBHOOK_URL}
+  on_schema_change: true
+  on_sync_gap: true

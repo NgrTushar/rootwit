@@ -1,0 +1,23 @@
+# Production-realistic Postgres for RootWit integration testing.
+# Usage:
+#   docker compose -f test/docker-compose.yml up -d
+#   docker compose -f test/docker-compose.yml down -v
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: rootwit-test-pg
+    environment:
+      POSTGRES_DB: saas_prod
+      POSTGRES_USER: rootwit_reader
+      POSTGRES_PASSWORD: r00tw1t_test_pass
+    ports:
+      - "5433:5432"   # 5433 to avoid collisions with local PG
+    volumes:
+      - ./seed.sql:/docker-entrypoint-initdb.d/01-seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rootwit_reader -d saas_prod"]
+      interval: 2s
+      timeout: 5s
+      retries: 10

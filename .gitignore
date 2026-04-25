@@ -1,0 +1,33 @@
+# Binaries
+rootwit
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# State & Local testing data
+rootwit-state.json
+rootwit-state.json.tmp
+*.lock
+saas_analytics/
+rootwit-output/
+
+# Test/Debug
+*.log
+*.test
+debug/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Go
+vendor/
+go.work
+
+# Internal Planning / AI Context
+.internal/
