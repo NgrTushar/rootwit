@@ -1,6 +1,6 @@
 # RootWit
 
-**Reliable, lightweight data pipeline. Postgres → BigQuery. Single binary. No Docker.**
+**[rootwit.com](https://rootwit.com)** | **Reliable, lightweight data pipeline. Postgres → BigQuery. Single binary. No Docker.**
 
 RootWit is a self-hosted sync engine that pulls data from your PostgreSQL database and loads it into Google BigQuery on a configurable schedule. It ships as a single compiled Go binary — no Docker, no Kubernetes, no JVM. Just download, configure, and run.
 
@@ -432,9 +432,5 @@ RootWit is open source and we welcome contributions. Whether it's a bug report, 
 Licensed under the **Business Source License (BSL) 1.1**. 
 
 You are free to self-host and modify RootWit for your own company's internal use. You may **not** use this code to build a competing managed hosting service or Data-Pipeline-as-a-Service. See the `LICENSE` file for exact terms.
-
----
-
-**Website:** [rootwit.com](https://rootwit.com)
 
 # rootwit
