@@ -12,7 +12,7 @@ Built for startups that are tired of Airbyte breaking silently and Fivetran's un
 
 | Problem | RootWit's Answer |
 |---|---|
-| Airbyte requires Docker Compose / Kubernetes, 5+ containers, 8GB RAM minimum | Single ~8MB binary. Runs on a $5/month VPS. |
+| Airbyte requires Docker Compose / Kubernetes, 5+ containers, 8GB RAM minimum | Single ~30MB binary. Runs on a $5/month VPS. |
 | Airbyte's connectors silently stop syncing when schemas change | Explicit 4-case schema change detection. Incompatible changes halt that table and alert you immediately. |
 | Fivetran charges per Monthly Active Row — unpredictable bills at scale | Self-hosted. Free forever. Flat-fee managed hosting coming soon. |
 | No native alerting in Airbyte — you find out when dashboards are wrong | Slack webhook + email alerts built-in from day one. |
@@ -27,9 +27,9 @@ Built for startups that are tired of Airbyte breaking silently and Fivetran's un
 ### 1. Build
 
 ```bash
-git clone https://github.com/yourusername/rootwit.git
+git clone https://github.com/NgrTushar/rootwit.git
 cd rootwit
-go build -o rootwit .
+go build -ldflags="-s -w" -o rootwit .
 ```
 
 ### 2. Configure
@@ -401,10 +401,9 @@ If you need exactly-once semantics in your analytics layer, handle deduplication
 
 | Feature | Description |
 |---|---|
-| 🔨 Razorpay connector | Sync payment events, settlements, and refunds directly into your warehouse |
+| 🔨 Razorpay connector | Sync payment events, settlements, and refunds directly into your warehouse — no other ETL tool offers this |
 | 🔨 Stripe connector | Charges, subscriptions, invoices — all in BigQuery |
 | 🔨 Managed hosted version | We run the infra. You just connect your credentials. Flat-fee pricing. |
-| 🔨 MySQL source | Same engine, same reliability — for MySQL-first teams |
 
 ### Planned (Q3–Q4 2026)
 
@@ -412,6 +411,7 @@ If you need exactly-once semantics in your analytics layer, handle deduplication
 |---|---|
 | 📋 CDC / real-time streaming | WAL-based Change Data Capture for sub-second sync latency |
 | 📋 Web dashboard | Monitor sync health, view logs, manage connections from a browser |
+| 📋 MySQL source | Same engine, same reliability — for MySQL-first teams |
 | 📋 Snowflake + ClickHouse destinations | Bring your own warehouse |
 | 📋 MongoDB source | Document database support |
 
@@ -432,5 +432,3 @@ RootWit is open source and we welcome contributions. Whether it's a bug report, 
 Licensed under the **Business Source License (BSL) 1.1**. 
 
 You are free to self-host and modify RootWit for your own company's internal use. You may **not** use this code to build a competing managed hosting service or Data-Pipeline-as-a-Service. See the `LICENSE` file for exact terms.
-
-# rootwit
