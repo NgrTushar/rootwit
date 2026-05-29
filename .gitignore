@@ -13,10 +13,17 @@ rootwit-state.json.tmp
 saas_analytics/
 rootwit-output/
 
+# Demo generated files (created by go run demo/seed/main.go and sync runs)
+demo/sample.db
+demo/output.duckdb
+demo/demo-state.json
+
 # Test/Debug
 *.log
 *.test
 debug/
+test/*.duckdb
+test/*-state.json
 
 # IDEs and Editors
 .vscode/
@@ -34,3 +41,7 @@ htmlfile/
 
 # Internal Planning / AI Context
 .internal/
+
+# Personal / brand assets
+*.pdf
+rootwit_brand_identity.html

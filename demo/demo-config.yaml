@@ -1,0 +1,31 @@
+version: "1"
+name: "demo-pipeline"
+
+source:
+  type: sqlite
+  sqlite:
+    path: ./demo/sample.db
+
+destination:
+  type: duckdb
+  duckdb:
+    path: ./demo/output.duckdb
+    memory_limit: 256MB
+
+sync:
+  schedule: "0 * * * *"   # every hour
+  batch_size: 1000
+  state_file: ./demo/demo-state.json
+
+  tables:
+    - name: users
+      sync_mode: incremental
+      cursor_field: updated_at
+
+    - name: orders
+      sync_mode: incremental
+      cursor_field: created_at
+
+    - name: events
+      sync_mode: append_only
+      cursor_field: created_at

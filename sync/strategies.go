@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/rootwit/rootwit/destinations"
 	"github.com/rootwit/rootwit/sources"
@@ -182,10 +183,13 @@ func drainAndWriteWithCursor(
 	batch := make([]types.Row, 0, batchSize)
 
 	for row := range rowCh {
-		// Track the max cursor value. Since rows are ORDER BY cursor_field,
-		// the last row has the max. But we track per-row to be safe.
+		// Track the true maximum cursor value across all rows.
+		// We compare explicitly rather than assuming source order —
+		// SQL sources return ASC but API sources (e.g. Razorpay) return DESC.
 		if v, ok := row[cursorField]; ok && v != nil {
-			maxCursor = v
+			if cursorGreater(v, maxCursor) {
+				maxCursor = v
+			}
 		}
 
 		batch = append(batch, row)
@@ -213,4 +217,32 @@ func drainAndWriteWithCursor(
 	}
 
 	return totalRows, maxCursor, nil
+}
+
+// cursorGreater reports whether a > b for the cursor types RootWit uses.
+// Handles time.Time, int64, float64, and string (RFC3339 timestamps compare
+// lexicographically). Returns true when b is nil (any real value beats nil).
+func cursorGreater(a, b any) bool {
+	if b == nil {
+		return true
+	}
+	switch av := a.(type) {
+	case time.Time:
+		if bv, ok := b.(time.Time); ok {
+			return av.After(bv)
+		}
+	case int64:
+		if bv, ok := b.(int64); ok {
+			return av > bv
+		}
+	case float64:
+		if bv, ok := b.(float64); ok {
+			return av > bv
+		}
+	case string:
+		if bv, ok := b.(string); ok {
+			return av > bv
+		}
+	}
+	return false
 }

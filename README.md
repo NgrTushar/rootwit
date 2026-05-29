@@ -412,8 +412,13 @@ If you need exactly-once semantics in your analytics layer, handle deduplication
 | 📋 CDC / real-time streaming | WAL-based Change Data Capture for sub-second sync latency |
 | 📋 Web dashboard | Monitor sync health, view logs, manage connections from a browser |
 | 📋 MySQL source | Same engine, same reliability — for MySQL-first teams |
-| 📋 Snowflake + ClickHouse destinations | Bring your own warehouse |
 | 📋 MongoDB source | Document database support |
+| 📋 Salesforce source | Sync CRM data — contacts, opportunities, accounts |
+| 📋 Stripe / payment API source | Any paginated REST API as a first-class source |
+| 📋 Snowflake destination | Bring your own warehouse |
+| 📋 Redshift destination | AWS-native analytics warehouse support |
+| 📋 ClickHouse destination | High-performance OLAP for real-time analytics |
+| 📋 DuckDB destination | Lightweight local analytics — no cloud required |
 
 ### The Vision
 

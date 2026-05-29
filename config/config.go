@@ -28,12 +28,22 @@ func Load(path string) (*RootConfig, error) {
 		return nil, fmt.Errorf("failed to parse config YAML: %w", err)
 	}
 
-	// Apply defaults.
-	if cfg.Source.Port == 0 {
-		cfg.Source.Port = 5432
-	}
-	if cfg.Source.SSLMode == "" {
-		cfg.Source.SSLMode = "require"
+	// Apply source defaults per type.
+	switch cfg.Source.Type {
+	case "", "postgres":
+		if cfg.Source.Port == 0 {
+			cfg.Source.Port = 5432
+		}
+		if cfg.Source.SSLMode == "" {
+			cfg.Source.SSLMode = "require"
+		}
+	case "mysql":
+		if cfg.Source.Port == 0 {
+			cfg.Source.Port = 3306
+		}
+		if cfg.Source.SSLMode == "" {
+			cfg.Source.SSLMode = "disable"
+		}
 	}
 	if cfg.Source.MaxConnections == 0 {
 		cfg.Source.MaxConnections = 5
@@ -49,6 +59,9 @@ func Load(path string) (*RootConfig, error) {
 	}
 	if cfg.Destination.Location == "" {
 		cfg.Destination.Location = "US"
+	}
+	if cfg.Destination.DuckDB.MemoryLimit == "" {
+		cfg.Destination.DuckDB.MemoryLimit = "512MB"
 	}
 
 	if err := validate(&cfg); err != nil {
@@ -82,21 +95,35 @@ func validate(cfg *RootConfig) error {
 	if cfg.Source.Type == "" {
 		return fmt.Errorf("config: 'source.type' is required")
 	}
-	validSourceTypes := map[string]bool{"postgres": true}
+	validSourceTypes := map[string]bool{"postgres": true, "sqlite": true, "mysql": true, "razorpay": true}
 	if !validSourceTypes[cfg.Source.Type] {
-		return fmt.Errorf("config: unsupported source type %q (supported: postgres)", cfg.Source.Type)
+		return fmt.Errorf("config: unsupported source type %q (supported: postgres, mysql, sqlite, razorpay)", cfg.Source.Type)
 	}
-	if cfg.Source.Host == "" {
-		return fmt.Errorf("config: 'source.host' is required")
-	}
-	if cfg.Source.Database == "" {
-		return fmt.Errorf("config: 'source.database' is required")
-	}
-	if cfg.Source.Username == "" {
-		return fmt.Errorf("config: 'source.username' is required")
-	}
-	if cfg.Source.Password == "" {
-		return fmt.Errorf("config: 'source.password' is required")
+	switch cfg.Source.Type {
+	case "postgres", "mysql":
+		if cfg.Source.Host == "" {
+			return fmt.Errorf("config: 'source.host' is required for %s", cfg.Source.Type)
+		}
+		if cfg.Source.Database == "" {
+			return fmt.Errorf("config: 'source.database' is required for %s", cfg.Source.Type)
+		}
+		if cfg.Source.Username == "" {
+			return fmt.Errorf("config: 'source.username' is required for %s", cfg.Source.Type)
+		}
+		if cfg.Source.Password == "" {
+			return fmt.Errorf("config: 'source.password' is required for %s", cfg.Source.Type)
+		}
+	case "sqlite":
+		if cfg.Source.SQLite.Path == "" {
+			return fmt.Errorf("config: 'source.sqlite.path' is required for sqlite")
+		}
+	case "razorpay":
+		if cfg.Source.Razorpay.KeyID == "" {
+			return fmt.Errorf("config: 'source.razorpay.key_id' is required for razorpay")
+		}
+		if cfg.Source.Razorpay.KeySecret == "" {
+			return fmt.Errorf("config: 'source.razorpay.key_secret' is required for razorpay")
+		}
 	}
 
 	// Reject literal credentials — they must come through ${ENV_VAR} substitution.
@@ -109,15 +136,22 @@ func validate(cfg *RootConfig) error {
 	if cfg.Destination.Type == "" {
 		return fmt.Errorf("config: 'destination.type' is required")
 	}
-	validDestTypes := map[string]bool{"bigquery": true}
+	validDestTypes := map[string]bool{"bigquery": true, "duckdb": true}
 	if !validDestTypes[cfg.Destination.Type] {
-		return fmt.Errorf("config: unsupported destination type %q (supported: bigquery)", cfg.Destination.Type)
+		return fmt.Errorf("config: unsupported destination type %q (supported: bigquery, duckdb)", cfg.Destination.Type)
 	}
-	if cfg.Destination.ProjectID == "" {
-		return fmt.Errorf("config: 'destination.project_id' is required")
-	}
-	if cfg.Destination.DatasetID == "" {
-		return fmt.Errorf("config: 'destination.dataset_id' is required")
+	switch cfg.Destination.Type {
+	case "bigquery":
+		if cfg.Destination.ProjectID == "" {
+			return fmt.Errorf("config: 'destination.project_id' is required for bigquery")
+		}
+		if cfg.Destination.DatasetID == "" {
+			return fmt.Errorf("config: 'destination.dataset_id' is required for bigquery")
+		}
+	case "duckdb":
+		if cfg.Destination.DuckDB.Path == "" {
+			return fmt.Errorf("config: 'destination.duckdb.path' is required for duckdb")
+		}
 	}
 
 	// Sync validation.
@@ -150,14 +184,16 @@ func validate(cfg *RootConfig) error {
 		}
 	}
 
-	// SSL mode validation.
-	validSSLModes := map[string]bool{
-		"disable":     true,
-		"require":     true,
-		"verify-full": true,
-	}
-	if !validSSLModes[cfg.Source.SSLMode] {
-		return fmt.Errorf("config: source.ssl_mode %q is invalid (valid: disable, require, verify-full)", cfg.Source.SSLMode)
+	// SSL mode validation (postgres and mysql only; sqlite has no SSL).
+	if cfg.Source.Type == "postgres" || cfg.Source.Type == "mysql" {
+		validSSLModes := map[string]bool{
+			"disable":     true,
+			"require":     true,
+			"verify-full": true,
+		}
+		if !validSSLModes[cfg.Source.SSLMode] {
+			return fmt.Errorf("config: source.ssl_mode %q is invalid (valid: disable, require, verify-full)", cfg.Source.SSLMode)
+		}
 	}
 
 	return nil
@@ -169,7 +205,7 @@ func validate(cfg *RootConfig) error {
 func HasLiteralCredential(rawYAML string) []string {
 	var warnings []string
 	// Fields that must use ${ENV_VAR} syntax.
-	credFields := []string{"password", "slack_webhook", "credentials_file"}
+	credFields := []string{"password", "slack_webhook", "credentials_file", "key_secret"}
 
 	lines := strings.Split(rawYAML, "\n")
 	for _, line := range lines {

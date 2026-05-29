@@ -9,11 +9,15 @@ import (
 	"github.com/rootwit/rootwit/config"
 	"github.com/rootwit/rootwit/destinations"
 	bqdest "github.com/rootwit/rootwit/destinations/bigquery"
+	duckdbdest "github.com/rootwit/rootwit/destinations/duckdb"
 	localdest "github.com/rootwit/rootwit/destinations/local"
 	"github.com/rootwit/rootwit/logger"
 	"github.com/rootwit/rootwit/scheduler"
 	"github.com/rootwit/rootwit/sources"
+	mysqlsrc "github.com/rootwit/rootwit/sources/mysql"
 	pgsrc "github.com/rootwit/rootwit/sources/postgres"
+	razorpaysrc "github.com/rootwit/rootwit/sources/razorpay"
+	sqlitesrc "github.com/rootwit/rootwit/sources/sqlite"
 	rwsync "github.com/rootwit/rootwit/sync"
 )
 
@@ -60,12 +64,25 @@ func main() {
 	// Construct concrete connectors based on config.
 	// This is the ONLY place where concrete implementations are referenced.
 	// The sync engine receives interfaces, not concrete types.
-	src := pgsrc.NewPostgresSource(cfg.Source)
+	var src sources.SourceConnector
+	switch cfg.Source.Type {
+	case "sqlite":
+		src = sqlitesrc.NewSQLiteSource(cfg.Source)
+	case "mysql":
+		src = mysqlsrc.NewMySQLSource(cfg.Source)
+	case "razorpay":
+		src = razorpaysrc.NewRazorpaySource(cfg.Source)
+	default:
+		src = pgsrc.NewPostgresSource(cfg.Source)
+	}
 
 	var dst destinations.DestinationConnector
-	if *destOverride == "local" {
+	switch {
+	case *destOverride == "local":
 		dst = localdest.NewLocalDestination(cfg.Destination)
-	} else {
+	case cfg.Destination.Type == "duckdb":
+		dst = duckdbdest.NewDuckDBDestination(cfg.Destination)
+	default:
 		dst = bqdest.NewBigQueryDestination(cfg.Destination)
 	}
 
@@ -184,8 +201,15 @@ func runValidate(cfg *config.RootConfig, src sources.SourceConnector, dst destin
 	exitCode := 0
 
 	// --- Source validation ---
-	// Host and db are redacted to prevent leaking connection details into CI logs.
-	fmt.Printf("  Source (postgres@%s/%s): testing connection... ", redact(cfg.Source.Host), redact(cfg.Source.Database))
+	var sourceLabel string
+	switch cfg.Source.Type {
+	case "sqlite":
+		sourceLabel = fmt.Sprintf("sqlite@%s", cfg.Source.SQLite.Path)
+	default:
+		// Host and db are redacted to prevent leaking connection details into CI logs.
+		sourceLabel = fmt.Sprintf("%s@%s/%s", cfg.Source.Type, redact(cfg.Source.Host), redact(cfg.Source.Database))
+	}
+	fmt.Printf("  Source (%s): testing connection... ", sourceLabel)
 	if err := src.Connect(); err != nil {
 		fmt.Fprintf(os.Stderr, "FAILED\n    connection error (details redacted)\n")
 		return 1
@@ -221,7 +245,7 @@ func runValidate(cfg *config.RootConfig, src sources.SourceConnector, dst destin
 	}
 
 	// --- Destination validation ---
-	destLabel := "bigquery"
+	destLabel := cfg.Destination.Type
 	if destType == "local" {
 		destLabel = "local (JSONL files)"
 	}

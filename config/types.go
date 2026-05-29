@@ -13,15 +13,28 @@ type RootConfig struct {
 
 // SourceConfig holds configuration for the data source.
 type SourceConfig struct {
-	Type                     string `yaml:"type"`
-	Host                     string `yaml:"host"`
-	Port                     int    `yaml:"port"`
-	Database                 string `yaml:"database"`
-	Username                 string `yaml:"username"`
-	Password                 string `yaml:"password"`
-	SSLMode                  string `yaml:"ssl_mode"`
-	MaxConnections           int    `yaml:"max_connections"`
-	ConnectionTimeoutSeconds int    `yaml:"connection_timeout_seconds"`
+	Type                     string       `yaml:"type"`
+	Host                     string       `yaml:"host"`
+	Port                     int          `yaml:"port"`
+	Database                 string       `yaml:"database"`
+	Username                 string       `yaml:"username"`
+	Password                 string       `yaml:"password"`
+	SSLMode                  string       `yaml:"ssl_mode"`
+	MaxConnections           int          `yaml:"max_connections"`
+	ConnectionTimeoutSeconds int          `yaml:"connection_timeout_seconds"`
+	SQLite                   SQLiteConfig   `yaml:"sqlite"`
+	Razorpay                 RazorpayConfig `yaml:"razorpay"`
+}
+
+// SQLiteConfig holds configuration for the SQLite source.
+type SQLiteConfig struct {
+	Path string `yaml:"path"`
+}
+
+// RazorpayConfig holds credentials for the Razorpay source.
+type RazorpayConfig struct {
+	KeyID     string `yaml:"key_id"`
+	KeySecret string `yaml:"key_secret"`
 }
 
 // DestConfig holds configuration for the data destination.
@@ -32,6 +45,13 @@ type DestConfig struct {
 	CredentialsFile   string `yaml:"credentials_file"`
 	AutoCreateDataset bool   `yaml:"auto_create_dataset"`
 	Location          string `yaml:"location"`
+	DuckDB            DuckDBConfig `yaml:"duckdb"`
+}
+
+// DuckDBConfig holds configuration for the DuckDB destination.
+type DuckDBConfig struct {
+	Path        string `yaml:"path"`
+	MemoryLimit string `yaml:"memory_limit"`
 }
 
 // SyncConfig holds configuration for sync behavior.

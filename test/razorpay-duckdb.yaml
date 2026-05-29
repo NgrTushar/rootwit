@@ -1,0 +1,36 @@
+version: "1"
+name: "razorpay-test"
+
+source:
+  type: razorpay
+  razorpay:
+    key_id: ${RAZORPAY_KEY_ID}
+    key_secret: ${RAZORPAY_KEY_SECRET}
+
+destination:
+  type: duckdb
+  duckdb:
+    path: ./test/razorpay-output.duckdb
+    memory_limit: 256MB
+
+sync:
+  schedule: "0 * * * *"
+  batch_size: 100
+  state_file: ./test/razorpay-state.json
+
+  tables:
+    - name: payments
+      sync_mode: incremental
+      cursor_field: created_at
+
+    - name: orders
+      sync_mode: incremental
+      cursor_field: created_at
+
+    - name: refunds
+      sync_mode: append_only
+      cursor_field: created_at
+
+    - name: customers
+      sync_mode: incremental
+      cursor_field: created_at

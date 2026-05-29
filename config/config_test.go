@@ -331,7 +331,7 @@ func TestLoad_UnsupportedSourceType(t *testing.T) {
 version: "1"
 name: "test"
 source:
-  type: mysql
+  type: mongodbx
   host: h
   database: d
   username: u
