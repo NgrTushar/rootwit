@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/smtp"
 	"strings"
+	"time"
 
 	"github.com/rootwit/rootwit/config"
 	"github.com/rootwit/rootwit/types"
@@ -114,6 +115,25 @@ func FormatSchemaChangeAlert(changes types.SchemaChanges) string {
 		}
 	}
 
+	return sb.String()
+}
+
+// FormatSyncGapAlert creates a human-readable sync-gap summary. A "sync gap"
+// means a table has not completed a successful sync within the expected window
+// (2× the schedule interval). This is RootWit's guard against the silent-stall
+// failure mode — a pipeline that quietly stopped delivering data.
+func FormatSyncGapAlert(connName string, threshold time.Duration, staleTables []string) string {
+	var sb strings.Builder
+
+	sb.WriteString("⏳ RootWit Sync Gap Detected\n")
+	sb.WriteString("================================\n\n")
+	sb.WriteString(fmt.Sprintf("Connection: %s\n", connName))
+	sb.WriteString(fmt.Sprintf("Expected each table to complete a successful sync at least every %s.\n\n", threshold))
+	sb.WriteString("Tables past that window:\n")
+	for _, t := range staleTables {
+		sb.WriteString(fmt.Sprintf("  • %s\n", t))
+	}
+	sb.WriteString("\nLikely causes: the table is failing repeatedly, or the process was stopped for a while.\n")
 	return sb.String()
 }
 

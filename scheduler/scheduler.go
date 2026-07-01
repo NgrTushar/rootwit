@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	gosync "sync"
 	"syscall"
+	"time"
 
 	"github.com/robfig/cron/v3"
 	"github.com/rootwit/rootwit/alerts"
@@ -27,11 +28,21 @@ var syncRunMu gosync.Mutex
 // Start begins the cron scheduler and blocks until SIGTERM or SIGINT is received.
 // On shutdown, it waits for the current sync run to finish before exiting.
 func Start(cfg *config.RootConfig, src sources.SourceConnector, dst destinations.DestinationConnector) error {
+	// SecondOptional accepts BOTH standard 5-field cron ("*/30 * * * *") and
+	// 6-field cron with a leading seconds field ("*/5 * * * * *"). Using plain
+	// cron.Second here would REQUIRE 6 fields and reject every 5-field schedule
+	// — including the ones we ship in config.example.yaml.
 	c := cron.New(cron.WithParser(cron.NewParser(
-		cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow,
+		cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow,
 	)))
 
 	engine := rwsync.NewEngine(cfg, src, dst)
+
+	// gapThreshold is 2× the nominal schedule interval. If a table has not
+	// completed a successful sync within this window, on_sync_gap alerts fire.
+	// Computed once; 0 means the schedule couldn't be measured, which disables
+	// gap checks (AddFunc below surfaces the real parse error if any).
+	gapThreshold := 2 * scheduleInterval(cfg.Sync.Schedule)
 
 	_, err := c.AddFunc(cfg.Sync.Schedule, func() {
 		if !syncRunMu.TryLock() {
@@ -43,6 +54,12 @@ func Start(cfg *config.RootConfig, src sources.SourceConnector, dst destinations
 		logger.L.Infow("sync started", "schedule", cfg.Sync.Schedule)
 		results := engine.RunSync()
 		handleResults(cfg, results)
+
+		// After each run, alert on any table that hasn't succeeded within the
+		// expected window — the backstop for a table failing run after run.
+		if cfg.Alerts.OnSyncGap {
+			checkSyncGaps(cfg, gapThreshold)
+		}
 	})
 	if err != nil {
 		return fmt.Errorf("scheduler: invalid cron expression %q: %w", cfg.Sync.Schedule, err)
@@ -50,6 +67,13 @@ func Start(cfg *config.RootConfig, src sources.SourceConnector, dst destinations
 
 	c.Start()
 	logger.L.Infow("scheduler started", "schedule", cfg.Sync.Schedule)
+
+	// Check for a gap at startup too: if the process was stopped for longer
+	// than the window, the last completion times will already be stale and the
+	// operator finds out immediately rather than on the next tick.
+	if cfg.Alerts.OnSyncGap {
+		checkSyncGaps(cfg, gapThreshold)
+	}
 
 	// Block until SIGTERM or SIGINT.
 	sigCh := make(chan os.Signal, 1)
@@ -105,4 +129,76 @@ func sendAlerts(cfg *config.RootConfig, subject, message string) {
 			logger.L.Warnw("failed to send email alert", "error", err)
 		}
 	}
+}
+
+// scheduleInterval returns the nominal gap between two consecutive fires of the
+// given cron schedule (e.g. "*/30 * * * *" → 30m). It asks the parsed schedule
+// for its next two activation times and measures the difference. Returns 0 if
+// the schedule can't be parsed — the caller treats 0 as "gap checks disabled".
+func scheduleInterval(schedule string) time.Duration {
+	parser := cron.NewParser(
+		cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow,
+	)
+	sched, err := parser.Parse(schedule)
+	if err != nil {
+		return 0
+	}
+	now := time.Now()
+	first := sched.Next(now)
+	if first.IsZero() {
+		return 0
+	}
+	second := sched.Next(first)
+	if second.IsZero() {
+		return 0
+	}
+	return second.Sub(first)
+}
+
+// detectSyncGaps returns a description for every configured table whose last
+// successful sync is older than threshold. It is pure (no I/O, clock passed in)
+// so the gap logic can be unit-tested without disk, network, or a live cron.
+//
+// Tables with no recorded completion are skipped: a never-completed table is
+// either a first run or is already covered by the per-run failure alert, so
+// flagging it here would only add a duplicate/false alarm.
+func detectSyncGaps(conn *rwsync.ConnectionState, tables []config.SyncTableConfig, threshold time.Duration, now time.Time) []string {
+	if conn == nil || threshold <= 0 {
+		return nil
+	}
+	var stale []string
+	for _, tc := range tables {
+		ts, ok := conn.Tables[tc.Name]
+		if !ok || ts.LastSyncCompleted == nil {
+			continue
+		}
+		completed, err := time.Parse(time.RFC3339, *ts.LastSyncCompleted)
+		if err != nil {
+			continue
+		}
+		if gap := now.Sub(completed); gap > threshold {
+			stale = append(stale, fmt.Sprintf("%s (last success %s ago)", tc.Name, gap.Round(time.Second)))
+		}
+	}
+	return stale
+}
+
+// checkSyncGaps loads the current state from disk, runs gap detection, and
+// alerts if any table is stale. Called after each run and once at startup.
+func checkSyncGaps(cfg *config.RootConfig, threshold time.Duration) {
+	if threshold <= 0 {
+		return
+	}
+	state, err := rwsync.LoadState(cfg.Sync.StateFile)
+	if err != nil {
+		logger.L.Warnw("sync-gap check skipped: cannot load state", "error", err)
+		return
+	}
+	stale := detectSyncGaps(state.Connections[cfg.Name], cfg.Sync.Tables, threshold, time.Now().UTC())
+	if len(stale) == 0 {
+		return
+	}
+	logger.L.Warnw("sync gap detected", "tables", stale, "threshold", threshold.String())
+	msg := alerts.FormatSyncGapAlert(cfg.Name, threshold, stale)
+	sendAlerts(cfg, "Sync Gap Detected", msg)
 }

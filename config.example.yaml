@@ -98,5 +98,8 @@ alerts:
   # Set to true once you've stabilised your schema — noisy channels get muted.
   on_schema_change: false
 
-  # Alert if last successful sync > 2× the schedule interval (default: true)
+  # Alert if a table's last successful sync is older than 2× the schedule
+  # interval — catches silent stalls (a table failing run after run, or the
+  # process having been stopped). Checked at startup and after every run.
+  # Omitted or false = disabled.
   on_sync_gap: true
