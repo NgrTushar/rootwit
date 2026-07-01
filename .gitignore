@@ -1,5 +1,8 @@
 # Binaries
 rootwit
+rootwit-linux-amd64
+rootwit-*-amd64
+rootwit-*-arm64
 *.exe
 *.exe~
 *.dll
