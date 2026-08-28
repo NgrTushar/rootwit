@@ -21,7 +21,7 @@ name: "prod-pipeline"
 # Source Configuration
 # =============================================================================
 source:
-  type: postgres                    # Currently supported: postgres
+  type: postgres                    # postgres | mysql | sqlite | razorpay
   host: ${POSTGRES_HOST}            # e.g., localhost, db.example.com
   port: 5432                        # Default: 5432
   database: ${POSTGRES_DB}          # Database name
@@ -35,7 +35,7 @@ source:
 # Destination Configuration
 # =============================================================================
 destination:
-  type: bigquery                    # Currently supported: bigquery
+  type: bigquery                    # bigquery | duckdb
   project_id: ${GCP_PROJECT_ID}    # GCP project ID
   dataset_id: rootwit_sync          # BigQuery dataset name
   credentials_file: ${GOOGLE_CREDENTIALS_FILE}  # Path to service account JSON key

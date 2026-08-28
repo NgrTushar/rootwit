@@ -2,9 +2,9 @@
 
 **[rootwit.com](https://rootwit.com)** | **A lightweight fault-tolerant data replication engine built in Go with schema evolution, crash recovery, and delivery guarantees.**
 
-RootWit is a self-hosted data replication engine that continuously syncs data from your sources into your warehouse. It detects and classifies schema changes automatically, recovers from crashes without data loss, and guarantees at-least-once delivery through atomic cursor checkpointing. Ships as a single compiled Go binary — no Docker, no Kubernetes, no JVM.
+RootWit is a self-hosted data replication engine that syncs data from your sources into your warehouse on a schedule. It classifies schema changes before every run, resumes from the last committed cursor after a crash, and provides at-least-once delivery through atomic state checkpointing. Ships as a single compiled Go binary — no Docker, no Kubernetes, no JVM.
 
-Built for teams that need database-grade reliability from their data pipeline, not eventually-consistent hope.
+**Sources:** PostgreSQL, MySQL, SQLite, Razorpay · **Destinations:** BigQuery, DuckDB, local JSONL
 
 ---
 
@@ -13,10 +13,10 @@ Built for teams that need database-grade reliability from their data pipeline, n
 | Property | How RootWit delivers it |
 |---|---|
 | **Fault tolerance** | Per-table isolation via goroutines — one table failing never blocks another. Exponential backoff with configurable retry limits. |
-| **Schema evolution** | 4-case classification on every sync: add, remove, widen, incompatible. Safe changes apply automatically; incompatible changes halt that table and alert immediately — never silently corrupt data. |
+| **Schema evolution** | 4-case classification on every sync: add, remove, widen, incompatible. Safe changes apply automatically; incompatible changes halt that table and alert rather than being auto-resolved. |
 | **Crash recovery** | Two-phase atomic checkpointing via temp file + rename. On restart, the engine detects the incomplete sync and resumes from the last committed cursor. No external state store required. |
 | **Delivery guarantees** | At-least-once delivery in all code paths. Cursor advances only after the destination confirms the write. Crash-recovery path may re-deliver rows in the overlap window — handle deduplication once in the warehouse. |
-| **Lightweight** | Single ~30MB binary. No Docker, no Kubernetes, no JVM. Runs on a $5/month VPS with a few MB of RAM overhead. |
+| **Lightweight** | Single ~65MB static binary (DuckDB's embedded engine is most of it). No Docker, no Kubernetes, no JVM, no external state store. |
 | **Observable** | Structured logging, Slack + email alerts on failure, schema change, or sync gap. State file is human-readable JSON you can inspect at any time. |
 
 ---
@@ -76,14 +76,14 @@ Every sync run follows this exact sequence for each configured table:
 Cron fires (or --once)
   → Load state.json (crash recovery check)
   → For each table (parallel goroutines):
-      → Read source schema from Postgres
-      → Read destination schema from BigQuery
+      → Read source schema
+      → Read destination schema
       → Diff schemas → classify changes (add, remove, widen, incompatible)
       → If incompatible change → halt this table, alert, continue others
       → Apply safe schema migrations automatically
       → Mark sync started → save state to disk (atomic)
-      → Read rows from Postgres (cursor-based or full table)
-      → Write rows to BigQuery via load jobs (free, not streaming inserts)
+      → Read rows from the source (cursor-based or full table)
+      → Write rows to the destination in batches
       → Mark sync completed → advance cursor → save state (atomic)
       → On failure: mark failed, increment failure counter, DO NOT advance cursor
   → Collect results → send alerts for any failures
@@ -97,7 +97,7 @@ Cron fires (or --once)
 
 | Mode | Behavior | Best For |
 |---|---|---|
-| `incremental` | Reads only rows where `cursor_field > last_cursor`. Advances the cursor only after BigQuery confirms the write. | Tables that get updated: `users`, `orders`, `accounts` |
+| `incremental` | Reads only rows where `cursor_field > last_cursor`. Advances the cursor only after the destination confirms the write. | Tables that get updated: `users`, `orders`, `accounts` |
 | `append_only` | Same cursor logic as incremental, but rows are never expected to be updated at the source. | Event/log tables: `events`, `page_views`, `audit_log` |
 | `full_refresh` | Writes all rows to a staging table, then atomically swaps it with the destination. The destination is never empty during a reload. | Small lookup tables: `plans`, `countries`, `config` |
 
@@ -113,27 +113,27 @@ RootWit detects and classifies schema changes before every replication run:
 
 | Change Type | What Happens | Example |
 |---|---|---|
-| **New column in source** | Auto-added to BigQuery as `NULLABLE`. Sync continues. | `ALTER TABLE users ADD COLUMN phone TEXT` |
-| **Column removed from source** | Kept in BigQuery, fills with `NULL`s going forward. | `ALTER TABLE users DROP COLUMN legacy_field` |
-| **Type widened** | Auto-altered in BigQuery to the wider type. | `INT32` → `INT64` |
+| **New column in source** | Auto-added to the destination as `NULLABLE`. Sync continues. | `ALTER TABLE users ADD COLUMN phone TEXT` |
+| **Column removed from source** | Kept in the destination, fills with `NULL`s going forward. | `ALTER TABLE users DROP COLUMN legacy_field` |
+| **Type widened** | Auto-altered in the destination to the wider type. | `INT32` → `INT64` |
 | **Incompatible type change** | **Sync halts for that table only.** Alert fires immediately. Other tables continue normally. | `INTEGER` → `VARCHAR` |
 
-This is where RootWit fundamentally differs from Airbyte: schema changes are never silent. You are always informed, and incompatible changes are never auto-resolved because the risk of data corruption is too high.
+Incompatible changes are never auto-resolved. The engine halts that table, leaves its cursor untouched, fires an alert, and continues syncing every other table — the classification logic is in [`sync/schema.go`](sync/schema.go) and the four cases are enumerated in [`types/types.go`](types/types.go).
 
 ---
 
 ## Crash Recovery
 
-RootWit uses a two-phase cursor system to guarantee **at-least-once delivery** with zero data loss:
+RootWit uses a two-phase cursor system to provide **at-least-once delivery**:
 
 1. **Before reading any rows:** Write `cursor_value_inprogress` and `status: running` to `state.json` (atomically via temp file + rename).
-2. **After BigQuery confirms the write:** Promote `cursor_value_inprogress → cursor_value`, set `status: success`, save state (atomically).
+2. **After the destination confirms the write:** Promote `cursor_value_inprogress → cursor_value`, set `status: success`, save state (atomically).
 
 **If the process crashes mid-sync:**
 - On restart, RootWit detects the incomplete sync (`started` is set but `completed` is null).
 - It resumes from the **last completed cursor** — never the in-progress one.
 - Rows between the last completed cursor and the crash point may be re-synced (at-least-once).
-- Deduplication is handled in your BigQuery query layer (e.g., `ROW_NUMBER()` or dbt).
+- Deduplication is your warehouse's job (e.g., `ROW_NUMBER()` or dbt).
 
 **State file atomicity:** `SaveState` always writes to `state.json.tmp` first, then performs `os.Rename`. A crash during write can never corrupt the existing state file.
 
@@ -200,6 +200,8 @@ alerts:
 
 All types map 1:1 to their BigQuery equivalents. All columns are created as `NULLABLE` by default. `REPEATED` fields use the inner type with BigQuery's `REPEATED` mode.
 
+Every connector owns its own `typemap.go` translating to and from these internal types — see `sources/{postgres,mysql,sqlite}/typemap.go` and `destinations/{bigquery,duckdb}/typemap.go`. Razorpay's schemas are declared directly in `sources/razorpay/schemas.go`, since the API offers no introspection.
+
 ---
 
 ## Configuration Reference
@@ -209,7 +211,7 @@ version: "1"
 name: "prod-pipeline"              # Used as the connection key in state.json
 
 source:
-  type: postgres                   # Currently supported: postgres
+  type: postgres                   # postgres | mysql | sqlite | razorpay
   host: ${POSTGRES_HOST}
   port: 5432
   database: ${POSTGRES_DB}
@@ -220,7 +222,7 @@ source:
   connection_timeout_seconds: 30   # Per-connection timeout (default: 30)
 
 destination:
-  type: bigquery
+  type: bigquery                   # bigquery | duckdb
   project_id: ${GCP_PROJECT_ID}
   dataset_id: rootwit_sync
   credentials_file: ${GOOGLE_CREDENTIALS_FILE}
@@ -263,20 +265,20 @@ rootwit/
 │   └── types.go               # Shared types (Schema, Row, Field, SyncResult)
 │                               # Zero internal imports — leaf of the dependency graph
 ├── sources/
-│   ├── source.go              # SourceConnector interface
-│   └── postgres/
-│       ├── postgres.go        # Postgres implementation (pgx connection pool)
-│       └── typemap.go         # Postgres OID → internal FieldType (17 mappings)
+│   ├── source.go              # SourceConnector interface (LOCKED)
+│   ├── postgres/              # pgx connection pool + OID → FieldType typemap
+│   ├── mysql/                 # go-sql-driver + typemap (tinyint(1) → BOOL)
+│   ├── sqlite/                # modernc.org/sqlite, pure Go
+│   └── razorpay/              # REST + Basic auth; entities as tables, hardcoded schemas
 ├── destinations/
-│   ├── destination.go         # DestinationConnector interface
-│   ├── bigquery/
-│   │   ├── bigquery.go        # BigQuery implementation (load jobs)
-│   │   └── typemap.go         # Internal FieldType → BigQuery FieldType
-│   └── local/
-│       └── local.go           # JSONL file destination (for testing)
+│   ├── destination.go         # DestinationConnector interface (LOCKED)
+│   ├── bigquery/              # load jobs (not streaming inserts) + typemap
+│   ├── duckdb/                # Appender API, single-writer mutex, transactional swap
+│   └── local/                 # JSONL file destination (for testing)
 ├── sync/
 │   ├── engine.go              # Orchestration — imports only interfaces, never concrete connectors
 │   ├── state.go               # Atomic state persistence, crash recovery, cursor management
+│   ├── flock.go               # Exclusive state-file lock (one instance per state.json)
 │   ├── schema.go              # Schema diffing (4-case classification)
 │   ├── strategies.go          # Sync mode implementations (incremental, full_refresh, append_only)
 │   └── retry.go               # Exponential backoff, fatal error classification
@@ -294,7 +296,7 @@ rootwit/
 
 - **Interface-driven engine:** `sync/engine.go` imports only `sources.SourceConnector` and `destinations.DestinationConnector` interfaces. It never references `postgres` or `bigquery` directly. Connector selection happens in `main.go`.
 - **Per-table isolation:** Each table syncs in its own goroutine with independent error handling. One table's failure cannot affect another.
-- **Atomic state writes:** State is always written via temp file + rename. No partial writes are possible.
+- **Atomic state writes:** State is written to `state.json.tmp` and then `os.Rename`d into place, so a crash mid-write leaves either the old file or the new one intact. `--repair-state` recovers the pending write if the process died between the two.
 - **Overlap prevention:** The scheduler uses a mutex with `TryLock()`. If a sync outlasts its cron interval, the next tick is skipped rather than running concurrently.
 - **Exclusive file lock:** Only one instance of RootWit can run against a given `state.json` at a time. A second instance will refuse to start.
 
@@ -305,9 +307,9 @@ rootwit/
 | Error Type | Behavior | Retries | Alert? |
 |---|---|---|---|
 | Network timeout / connection refused | Exponential backoff | 3 attempts (1s, 2s, 4s) | Only after all retries fail |
-| BigQuery quota exceeded (429) | Wait 60s, retry once | 1 retry | Yes, if retry fails |
+| Rate limit / quota exceeded (429) | Same retryable path — exponential backoff | 3 attempts (1s, 2s, 4s) | Only after all retries fail |
 | Incompatible schema change | Halt table immediately | None — fatal for this table | Yes, immediate |
-| Unknown Postgres column type | Map to STRING, log WARNING | N/A — continues | No |
+| Unknown source column type | Map to STRING, log WARNING | N/A — continues | No |
 | Auth / credentials error | Fatal — exit immediately | None | No (process exits before alerts are wired) |
 | Config validation failure | Fatal — exit immediately | None | No |
 
@@ -363,7 +365,7 @@ The state file is human-readable JSON that tracks cursor positions, sync status,
 - **Sources:** PostgreSQL 10+, MySQL 5.7+, SQLite 3, Razorpay API
 - **Destinations:** Google BigQuery, DuckDB (or `--dest local` for testing)
 - **Runtime:** Linux, macOS, or any platform Go compiles to. No Docker. No Kubernetes. No JVM.
-- **Go 1.22+** (for building from source)
+- **Go 1.25+** (for building from source; DuckDB requires CGo)
 
 ## Dependencies
 
@@ -425,7 +427,7 @@ If you need exactly-once semantics in your analytics layer, handle deduplication
 
 ### The Vision
 
-RootWit is building the replication engine that teams reach for when they need reliability guarantees — not another ETL tool that works until it doesn't. The fault-tolerance and schema evolution properties at the core are non-negotiable; everything else (more connectors, more destinations, managed hosting) is built on top of that foundation. The core engine will always be open source and free to self-host.
+RootWit prioritises correctness properties — fault isolation, schema classification, crash recovery, and an honest delivery guarantee — over connector count. Everything else (more connectors, more destinations, managed hosting) is built on that foundation. The core engine stays open source and free to self-host.
 
 ---
 
