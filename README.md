@@ -1,22 +1,23 @@
 # RootWit
 
-**[rootwit.com](https://rootwit.com)** | **Reliable, lightweight data pipeline. Postgres → BigQuery. Single binary. No Docker.**
+**[rootwit.com](https://rootwit.com)** | **A lightweight fault-tolerant data replication engine built in Go with schema evolution, crash recovery, and delivery guarantees.**
 
-RootWit is a self-hosted sync engine that pulls data from your PostgreSQL database and loads it into Google BigQuery on a configurable schedule. It ships as a single compiled Go binary — no Docker, no Kubernetes, no JVM. Just download, configure, and run.
+RootWit is a self-hosted data replication engine that continuously syncs data from your sources into your warehouse. It detects and classifies schema changes automatically, recovers from crashes without data loss, and guarantees at-least-once delivery through atomic cursor checkpointing. Ships as a single compiled Go binary — no Docker, no Kubernetes, no JVM.
 
-Built for startups that are tired of Airbyte breaking silently and Fivetran's unpredictable bills.
+Built for teams that need database-grade reliability from their data pipeline, not eventually-consistent hope.
 
 ---
 
 ## Why RootWit?
 
-| Problem | RootWit's Answer |
+| Property | How RootWit delivers it |
 |---|---|
-| Airbyte requires Docker Compose / Kubernetes, 5+ containers, 8GB RAM minimum | Single ~30MB binary. Runs on a $5/month VPS. |
-| Airbyte's connectors silently stop syncing when schemas change | Explicit 4-case schema change detection. Incompatible changes halt that table and alert you immediately. |
-| Fivetran charges per Monthly Active Row — unpredictable bills at scale | Self-hosted. Free forever. Flat-fee managed hosting coming soon. |
-| No native alerting in Airbyte — you find out when dashboards are wrong | Slack webhook + email alerts built-in from day one. |
-| Airbyte state lives in its own internal Postgres — OOM kills lose sync state | Local `state.json` with atomic writes and automatic crash recovery. No external dependency. |
+| **Fault tolerance** | Per-table isolation via goroutines — one table failing never blocks another. Exponential backoff with configurable retry limits. |
+| **Schema evolution** | 4-case classification on every sync: add, remove, widen, incompatible. Safe changes apply automatically; incompatible changes halt that table and alert immediately — never silently corrupt data. |
+| **Crash recovery** | Two-phase atomic checkpointing via temp file + rename. On restart, the engine detects the incomplete sync and resumes from the last committed cursor. No external state store required. |
+| **Delivery guarantees** | At-least-once delivery in all code paths. Cursor advances only after the destination confirms the write. Crash-recovery path may re-deliver rows in the overlap window — handle deduplication once in the warehouse. |
+| **Lightweight** | Single ~30MB binary. No Docker, no Kubernetes, no JVM. Runs on a $5/month VPS with a few MB of RAM overhead. |
+| **Observable** | Structured logging, Slack + email alerts on failure, schema change, or sync gap. State file is human-readable JSON you can inspect at any time. |
 
 ---
 
@@ -106,9 +107,9 @@ Unlike naive truncate-and-reload, RootWit writes all rows to a `{table}_rootwit_
 
 ---
 
-## Schema Change Handling
+## Schema Evolution
 
-RootWit detects and classifies schema changes before every sync:
+RootWit detects and classifies schema changes before every replication run:
 
 | Change Type | What Happens | Example |
 |---|---|---|
@@ -359,8 +360,8 @@ The state file is human-readable JSON that tracks cursor positions, sync status,
 
 ## Requirements
 
-- **Source:** PostgreSQL 10+
-- **Destination:** Google BigQuery (or `--dest local` for testing)
+- **Sources:** PostgreSQL 10+, MySQL 5.7+, SQLite 3, Razorpay API
+- **Destinations:** Google BigQuery, DuckDB (or `--dest local` for testing)
 - **Runtime:** Linux, macOS, or any platform Go compiles to. No Docker. No Kubernetes. No JVM.
 - **Go 1.22+** (for building from source)
 
@@ -368,7 +369,10 @@ The state file is human-readable JSON that tracks cursor positions, sync status,
 
 ```
 github.com/jackc/pgx/v5           # Postgres driver (native protocol)
+github.com/go-sql-driver/mysql     # MySQL driver
+modernc.org/sqlite                 # SQLite driver (pure Go)
 cloud.google.com/go/bigquery       # Official BigQuery client
+github.com/marcboeker/go-duckdb    # DuckDB driver (CGo)
 gopkg.in/yaml.v3                   # YAML config parsing
 github.com/robfig/cron/v3          # Cron scheduler
 go.uber.org/zap                    # Structured logging
@@ -390,20 +394,22 @@ If you need exactly-once semantics in your analytics layer, handle deduplication
 
 | Feature | Description |
 |---|---|
-| ✅ Postgres → BigQuery sync | Full table + incremental sync with cursor tracking |
-| ✅ Schema change detection | 4-case classification: add, remove, widen, incompatible |
-| ✅ Crash recovery | Atomic state persistence, automatic resume from last safe cursor |
-| ✅ Slack + email alerting | Immediate notifications on sync failure, schema change, or sync gap |
-| ✅ Per-table isolation | One table failing never blocks another — each runs in its own goroutine |
-| ✅ Local testing mode | `--dest local` writes JSONL files for full pipeline testing without GCP |
+| ✅ Postgres, MySQL & SQLite sources | Full refresh, incremental, and append-only modes with cursor checkpointing |
+| ✅ BigQuery & DuckDB destinations | Batched writes; atomic staging-table swap on full refresh |
+| ✅ Razorpay source | Payments, orders, refunds, and customers over the paginated REST API |
+| ✅ Schema evolution | 4-case classification: add, remove, widen, incompatible — safe changes auto-apply, breaking changes halt and alert |
+| ✅ Crash recovery | Atomic two-phase checkpointing; engine resumes from last committed cursor after any crash |
+| ✅ At-least-once delivery | Cursor advances only after destination confirms write; overlap window is bounded and deterministic |
+| ✅ Fault isolation | Per-table goroutines with independent error handling — one failure never propagates |
+| ✅ Observability | Slack + email alerts on failure, schema change, or sync gap; structured JSON logs; human-readable state file |
+| ✅ Local testing mode | `--dest local` writes JSONL files for full pipeline testing without any cloud credentials |
 
 ### Coming Next (Q2 2026)
 
 | Feature | Description |
 |---|---|
-| 🔨 Razorpay connector | Sync payment events, settlements, and refunds directly into your warehouse — no other ETL tool offers this |
-| 🔨 Stripe connector | Charges, subscriptions, invoices — all in BigQuery |
 | 🔨 Managed hosted version | We run the infra. You just connect your credentials. Flat-fee pricing. |
+| 🔨 Stripe connector | Charges, subscriptions, invoices |
 
 ### Planned (Q3–Q4 2026)
 
@@ -411,18 +417,15 @@ If you need exactly-once semantics in your analytics layer, handle deduplication
 |---|---|
 | 📋 CDC / real-time streaming | WAL-based Change Data Capture for sub-second sync latency |
 | 📋 Web dashboard | Monitor sync health, view logs, manage connections from a browser |
-| 📋 MySQL source | Same engine, same reliability — for MySQL-first teams |
 | 📋 MongoDB source | Document database support |
 | 📋 Salesforce source | Sync CRM data — contacts, opportunities, accounts |
-| 📋 Stripe / payment API source | Any paginated REST API as a first-class source |
 | 📋 Snowflake destination | Bring your own warehouse |
 | 📋 Redshift destination | AWS-native analytics warehouse support |
 | 📋 ClickHouse destination | High-performance OLAP for real-time analytics |
-| 📋 DuckDB destination | Lightweight local analytics — no cloud required |
 
 ### The Vision
 
-RootWit is building toward a world where any startup can have **enterprise-grade data infrastructure** without enterprise-grade budgets or ops teams. The core engine will always be open source and free to self-host. Future revenue comes from managed hosting and premium support — not from locking features behind paywalls.
+RootWit is building the replication engine that teams reach for when they need reliability guarantees — not another ETL tool that works until it doesn't. The fault-tolerance and schema evolution properties at the core are non-negotiable; everything else (more connectors, more destinations, managed hosting) is built on top of that foundation. The core engine will always be open source and free to self-host.
 
 ---
 
